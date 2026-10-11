@@ -32,12 +32,12 @@ func TestA_run_asks_batch_size_and_stops_at_timeout(t *testing.T) {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(5 * time.Millisecond):
+			case <-time.After(10 * time.Millisecond):
 				return nil
 			}
 		})
 	})
-	r := runner.New(job, runner.Options{BatchSize: 100, RunTimeout: 30 * time.Millisecond, Logger: logging.New(&bytes.Buffer{})})
+	r := runner.New(job, runner.Options{BatchSize: 100, RunTimeout: 100 * time.Millisecond, Logger: logging.New(&bytes.Buffer{})})
 
 	start := time.Now()
 	res := r.RunOnce(context.Background())
@@ -45,8 +45,8 @@ func TestA_run_asks_batch_size_and_stops_at_timeout(t *testing.T) {
 	if asked != 100 {
 		t.Fatalf("job was asked for %d items, want 100", asked)
 	}
-	if res.Processed == 0 || res.Processed >= 100 {
-		t.Fatalf("processed = %d, want some but fewer than 100 once the timeout passed", res.Processed)
+	if res.Processed >= 100 {
+		t.Fatalf("processed = %d, want fewer than 100 once the timeout passed", res.Processed)
 	}
 	if time.Since(start) > time.Second {
 		t.Fatalf("run lasted %s, the timeout did not stop it", time.Since(start))

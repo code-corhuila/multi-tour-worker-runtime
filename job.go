@@ -15,5 +15,16 @@ type Job interface {
 // Each applies handle to every item. A failed item is counted and logged, never stops the batch;
 // only a done context does, so RUN_TIMEOUT bounds the work.
 func Each[T any](ctx context.Context, log *slog.Logger, items []T, handle func(context.Context, T) error) (processed, failed int) {
-	return 0, 0
+	for _, item := range items {
+		if ctx.Err() != nil {
+			return processed, failed
+		}
+		if err := handle(ctx, item); err != nil {
+			failed++
+			log.WarnContext(ctx, "item failed, left for the next run", "error", err)
+			continue
+		}
+		processed++
+	}
+	return processed, failed
 }
