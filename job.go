@@ -1,7 +1,8 @@
-package runtime
+package workerruntime
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 )
 
@@ -19,7 +20,7 @@ func Each[T any](ctx context.Context, log *slog.Logger, items []T, handle func(c
 		if ctx.Err() != nil {
 			return processed, failed
 		}
-		if err := handle(ctx, item); err != nil {
+		if err := safely(ctx, handle, item); err != nil {
 			failed++
 			log.WarnContext(ctx, "item failed, left for the next run", "error", err)
 			continue
@@ -27,4 +28,14 @@ func Each[T any](ctx context.Context, log *slog.Logger, items []T, handle func(c
 		processed++
 	}
 	return processed, failed
+}
+
+// safely turns a panic in handle into an error, so one bad item cannot kill the worker.
+func safely[T any](ctx context.Context, handle func(context.Context, T) error, item T) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("panic: %v", p)
+		}
+	}()
+	return handle(ctx, item)
 }

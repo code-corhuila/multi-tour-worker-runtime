@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	wrt "github.com/code-corhuila/multi-tour-worker-runtime"
+	workerruntime "github.com/code-corhuila/multi-tour-worker-runtime"
 	"github.com/code-corhuila/multi-tour-worker-runtime/correlation"
 	"github.com/code-corhuila/multi-tour-worker-runtime/logging"
 	"github.com/code-corhuila/multi-tour-worker-runtime/runner"
@@ -41,7 +41,7 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-func newRunner(t *testing.T, job wrt.Job, opts runner.Options) *runner.Runner {
+func newRunner(t *testing.T, job workerruntime.Job, opts runner.Options) *runner.Runner {
 	t.Helper()
 	r, err := runner.New(job, opts)
 	if err != nil {
@@ -55,7 +55,7 @@ func TestA_run_asks_batch_size_and_stops_at_timeout(t *testing.T) {
 	job := fakeJob(func(ctx context.Context, batch int) (int, int) {
 		asked = batch
 		items := make([]int, batch)
-		return wrt.Each(ctx, logging.New(&bytes.Buffer{}), items, func(ctx context.Context, _ int) error {
+		return workerruntime.Each(ctx, logging.New(&bytes.Buffer{}), items, func(ctx context.Context, _ int) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -83,7 +83,7 @@ func TestA_run_asks_batch_size_and_stops_at_timeout(t *testing.T) {
 func TestA_failed_item_is_counted_and_batch_continues(t *testing.T) {
 	var reached []int
 	job := fakeJob(func(ctx context.Context, batch int) (int, int) {
-		return wrt.Each(ctx, logging.New(&bytes.Buffer{}), []int{1, 2, 3}, func(_ context.Context, n int) error {
+		return workerruntime.Each(ctx, logging.New(&bytes.Buffer{}), []int{1, 2, 3}, func(_ context.Context, n int) error {
 			reached = append(reached, n)
 			if n == 2 {
 				return errors.New("boom")
@@ -191,13 +191,13 @@ func TestC_log_lines_carry_the_run_correlation(t *testing.T) {
 func TestNew_refuses_unusable_options(t *testing.T) {
 	job := fakeJob(func(context.Context, int) (int, int) { return 0, 0 })
 	ok := runner.Options{Interval: time.Second, BatchSize: 1, RunTimeout: time.Second}
-	cases := map[string]func(o runner.Options) (wrt.Job, runner.Options){
-		"interval zero without ticks": func(o runner.Options) (wrt.Job, runner.Options) { o.Interval = 0; return job, o },
-		"interval negative":           func(o runner.Options) (wrt.Job, runner.Options) { o.Interval = -time.Second; return job, o },
-		"run timeout zero":            func(o runner.Options) (wrt.Job, runner.Options) { o.RunTimeout = 0; return job, o },
-		"batch size zero":             func(o runner.Options) (wrt.Job, runner.Options) { o.BatchSize = 0; return job, o },
-		"batch size negative":         func(o runner.Options) (wrt.Job, runner.Options) { o.BatchSize = -1; return job, o },
-		"nil job":                     func(o runner.Options) (wrt.Job, runner.Options) { return nil, o },
+	cases := map[string]func(o runner.Options) (workerruntime.Job, runner.Options){
+		"interval zero without ticks": func(o runner.Options) (workerruntime.Job, runner.Options) { o.Interval = 0; return job, o },
+		"interval negative":           func(o runner.Options) (workerruntime.Job, runner.Options) { o.Interval = -time.Second; return job, o },
+		"run timeout zero":            func(o runner.Options) (workerruntime.Job, runner.Options) { o.RunTimeout = 0; return job, o },
+		"batch size zero":             func(o runner.Options) (workerruntime.Job, runner.Options) { o.BatchSize = 0; return job, o },
+		"batch size negative":         func(o runner.Options) (workerruntime.Job, runner.Options) { o.BatchSize = -1; return job, o },
+		"nil job":                     func(o runner.Options) (workerruntime.Job, runner.Options) { return nil, o },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -227,7 +227,7 @@ func TestA_panic_in_an_item_is_a_failed_item(t *testing.T) {
 				t.Errorf("the panic escaped Each: %v", p)
 			}
 		}()
-		processed, failed = wrt.Each(ctx, logging.New(&logs), []int{1, 2, 3}, func(_ context.Context, n int) error {
+		processed, failed = workerruntime.Each(ctx, logging.New(&logs), []int{1, 2, 3}, func(_ context.Context, n int) error {
 			if n == 2 {
 				panic("kaboom")
 			}

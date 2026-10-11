@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 )
@@ -21,6 +22,13 @@ type Secret string
 
 // Reveal returns the real value.
 func (s Secret) Reveal() string { return string(s) }
+
+// String, GoString and LogValue cover fmt (%v, %s, %#v) and slog, so the token cannot leak by accident.
+func (Secret) String() string { return "***" }
+
+func (Secret) GoString() string { return "***" }
+
+func (Secret) LogValue() slog.Value { return slog.StringValue("***") }
 
 // Load reads the shared variables through getenv and applies the declared defaults.
 // A missing SERVICE_TOKEN is an error: the worker must not start without it.
