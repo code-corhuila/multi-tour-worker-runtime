@@ -14,7 +14,7 @@ type APIError struct {
 	Status     int
 	Code       string
 	Message    string
-	Details    any
+	Details    string
 	TraceID    string
 	RetryAfter time.Duration
 }
@@ -33,13 +33,13 @@ func (e *APIError) Retryable() bool {
 func readAPIError(resp *http.Response, body []byte) *APIError {
 	e := &APIError{Status: resp.StatusCode, Message: http.StatusText(resp.StatusCode)}
 	var env struct {
-		Error   string `json:"error"`
-		Message string `json:"message"`
-		Details any    `json:"details"`
-		TraceID string `json:"traceId"`
+		Error   string          `json:"error"`
+		Message string          `json:"message"`
+		Details json.RawMessage `json:"details"`
+		TraceID string          `json:"traceId"`
 	}
 	if json.Unmarshal(body, &env) == nil && env.Error != "" {
-		e.Code, e.Message, e.Details, e.TraceID = env.Error, env.Message, env.Details, env.TraceID
+		e.Code, e.Message, e.Details, e.TraceID = env.Error, env.Message, string(env.Details), env.TraceID
 	}
 	// shortcut: Retry-After in seconds only, HTTP-date form is ignored; upgrade if a callee sends dates.
 	if s, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && s > 0 {
@@ -54,3 +54,11 @@ type TransportError struct{ Err error }
 func (e *TransportError) Error() string { return "transport: " + e.Err.Error() }
 
 func (e *TransportError) Unwrap() error { return e.Err }
+
+// DecodeError is a 2xx answer that could not be used: invalid JSON or a body over the size limit.
+// It is never retried.
+type DecodeError struct{ Err error }
+
+func (e *DecodeError) Error() string { return "decode response: " + e.Err.Error() }
+
+func (e *DecodeError) Unwrap() error { return e.Err }
