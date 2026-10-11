@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -30,7 +31,8 @@ func (e *APIError) Retryable() bool {
 
 // readAPIError reads the common envelope {error, message, details?, traceId}; a body that is not
 // one yields only the status, so foreign text never reaches an error.
-func readAPIError(resp *http.Response, body []byte) *APIError {
+// Every copied field is stripped of the token and cut to 500 runes.
+func (c *Client) readAPIError(resp *http.Response, body []byte) *APIError {
 	e := &APIError{Status: resp.StatusCode, Message: http.StatusText(resp.StatusCode)}
 	var env struct {
 		Error   string          `json:"error"`
@@ -39,13 +41,27 @@ func readAPIError(resp *http.Response, body []byte) *APIError {
 		TraceID string          `json:"traceId"`
 	}
 	if json.Unmarshal(body, &env) == nil && env.Error != "" {
-		e.Code, e.Message, e.Details, e.TraceID = env.Error, env.Message, string(env.Details), env.TraceID
+		e.Code, e.Message = c.clean(env.Error), c.clean(env.Message)
+		e.Details, e.TraceID = c.clean(string(env.Details)), c.clean(env.TraceID)
 	}
 	// shortcut: Retry-After in seconds only, HTTP-date form is ignored; upgrade if a callee sends dates.
-	if s, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && s > 0 {
-		e.RetryAfter = time.Duration(s) * time.Second
+	if s, err := strconv.ParseInt(resp.Header.Get("Retry-After"), 10, 64); err == nil && s > 0 {
+		e.RetryAfter = maxWait
+		if s < int64(maxWait/time.Second) {
+			e.RetryAfter = time.Duration(s) * time.Second
+		}
 	}
 	return e
+}
+
+func (c *Client) clean(s string) string {
+	if t := c.token.Reveal(); t != "" {
+		s = strings.ReplaceAll(s, t, "***")
+	}
+	if r := []rune(s); len(r) > 500 {
+		s = string(r[:500])
+	}
+	return s
 }
 
 // TransportError is a failure before a full answer arrived (network, timeout, truncated body).

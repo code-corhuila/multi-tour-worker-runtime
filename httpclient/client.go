@@ -9,14 +9,20 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/code-corhuila/multi-tour-worker-runtime/config"
 	"github.com/code-corhuila/multi-tour-worker-runtime/correlation"
 )
 
-// maxBody bounds what is read from one answer.
-const maxBody = 1 << 20
+const (
+	maxBody         = 1 << 20          // bytes read from one answer
+	maxWait         = 30 * time.Second // ceiling of any wait between attempts
+	defaultTimeout  = 5 * time.Second
+	defaultAttempts = 3
+	defaultBaseWait = 200 * time.Millisecond
+)
 
 // Sleeper waits d or until ctx ends; tests replace it so nothing really sleeps.
 type Sleeper func(ctx context.Context, d time.Duration) error
@@ -62,11 +68,25 @@ func WithJitter(f func(max time.Duration) time.Duration) Option {
 }
 
 // New returns a client with the defaults of plan D-03: 5 s per attempt, 3 attempts, 200 ms base.
+// Options below their minimum fall back to those defaults. Redirects are never followed, so the
+// bearer token is only ever sent to baseURL.
 func New(baseURL string, token config.Secret, opts ...Option) *Client {
-	c := &Client{baseURL: baseURL, token: token, http: &http.Client{},
-		timeout: 5 * time.Second, attempts: 3, baseWait: 200 * time.Millisecond}
+	c := &Client{baseURL: strings.TrimRight(baseURL, "/"), token: token,
+		http: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}},
+		timeout: defaultTimeout, attempts: defaultAttempts, baseWait: defaultBaseWait}
 	for _, o := range opts {
 		o(c)
+	}
+	if c.timeout <= 0 {
+		c.timeout = defaultTimeout
+	}
+	if c.attempts < 1 {
+		c.attempts = defaultAttempts
+	}
+	if c.baseWait <= 0 {
+		c.baseWait = defaultBaseWait
 	}
 	return c
 }
@@ -85,23 +105,27 @@ func (c *Client) Do(ctx context.Context, req Request, out any) error {
 			return fmt.Errorf("encode request body: %w", err)
 		}
 	}
-	var last error
-	for attempt := 0; attempt < c.attempts; attempt++ {
-		if attempt > 0 {
-			if err := c.wait(ctx, attempt, last); err != nil {
-				return err
-			}
-		}
+	for attempt := 1; ; attempt++ {
 		err := c.once(ctx, req, payload, out)
 		if err == nil {
 			return nil
 		}
-		if ctx.Err() != nil || !retryable(err) {
+		if attempt >= c.attempts || ctx.Err() != nil || !retryable(err) || !repeatable(req) {
 			return err
 		}
-		last = err
+		d := c.delay(attempt, err)
+		if dl, ok := ctx.Deadline(); ok && time.Until(dl) <= d {
+			return err // the wait would outlive the context
+		}
+		if perr := c.pause(ctx, d); perr != nil {
+			return perr
+		}
 	}
-	return last
+}
+
+// repeatable: a call that creates something is repeated only when it carries an Idempotency-Key.
+func repeatable(req Request) bool {
+	return req.IdempotencyKey != "" || req.Method == http.MethodGet || req.Method == http.MethodHead
 }
 
 func retryable(err error) bool {
@@ -113,20 +137,24 @@ func retryable(err error) bool {
 	return errors.As(err, &tErr)
 }
 
-// wait sleeps the server's Retry-After when it gave one, else a random time in [0, base x 2^attempt].
-func (c *Client) wait(ctx context.Context, attempt int, last error) error {
+// delay is the server's Retry-After when it gave one, else a random time in [0, min(base x 2^attempt, maxWait)].
+func (c *Client) delay(attempt int, last error) time.Duration {
 	var apiErr *APIError
-	d := time.Duration(0)
-	if errors.As(last, &apiErr) {
-		d = apiErr.RetryAfter
+	if errors.As(last, &apiErr) && apiErr.RetryAfter > 0 {
+		return apiErr.RetryAfter
 	}
-	if d <= 0 {
-		jitter := c.jitter
-		if jitter == nil {
-			jitter = func(max time.Duration) time.Duration { return rand.N(max + 1) }
-		}
-		d = jitter(c.baseWait << attempt)
+	ceiling := c.baseWait
+	for i := 0; i < attempt && ceiling < maxWait; i++ {
+		ceiling *= 2
 	}
+	ceiling = min(ceiling, maxWait)
+	if c.jitter != nil {
+		return c.jitter(ceiling)
+	}
+	return rand.N(ceiling + 1)
+}
+
+func (c *Client) pause(ctx context.Context, d time.Duration) error {
 	if c.sleep != nil {
 		return c.sleep(ctx, d)
 	}
@@ -143,7 +171,7 @@ func (c *Client) wait(ctx context.Context, attempt int, last error) error {
 func (c *Client) once(ctx context.Context, req Request, payload []byte, out any) error {
 	actx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	hr, err := http.NewRequestWithContext(actx, req.Method, c.baseURL+req.Path, bytes.NewReader(payload))
+	hr, err := http.NewRequestWithContext(actx, req.Method, c.baseURL+"/"+strings.TrimLeft(req.Path, "/"), bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
@@ -163,18 +191,22 @@ func (c *Client) once(ctx context.Context, req Request, payload []byte, out any)
 		return &TransportError{Err: err}
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {
 		return &TransportError{Err: err}
 	}
+	oversized := len(body) > maxBody
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if oversized {
+			return &DecodeError{Err: errors.New("body exceeds 1 MiB")}
+		}
 		if out == nil || len(body) == 0 {
 			return nil
 		}
 		if err := json.Unmarshal(body, out); err != nil {
-			return fmt.Errorf("decode response: %w", err)
+			return &DecodeError{Err: err}
 		}
 		return nil
 	}
-	return readAPIError(resp, body)
+	return c.readAPIError(resp, body)
 }
