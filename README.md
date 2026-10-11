@@ -14,7 +14,8 @@ business rule and exposes no API.
 ## How to start it
 
 It does not run by itself. A worker imports it: `go get github.com/code-corhuila/multi-tour-worker-runtime@<commit>`
-(public repository, no token). Packages: `runner`, `correlation`, `httpclient`, `config`, `health`, `logging`.
+(public repository, no token). The root package is `workerruntime` (the `Job` port and `Each`); import it as
+`workerruntime "github.com/code-corhuila/multi-tour-worker-runtime"`. Other packages: `runner`, `correlation`, `httpclient`, `config`, `health`, `logging`.
 
 ## Where the data is
 
