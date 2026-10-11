@@ -35,11 +35,11 @@ type Runner struct {
 }
 
 // New builds a Runner for job.
-func New(job wrt.Job, opts Options) *Runner {
+func New(job wrt.Job, opts Options) (*Runner, error) {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	return &Runner{job: job, opts: opts}
+	return &Runner{job: job, opts: opts}, nil
 }
 
 // RunOnce executes one bounded run under a fresh correlation id.

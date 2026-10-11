@@ -13,13 +13,19 @@ type Config struct {
 	RunTimeout   time.Duration
 	HTTPTimeout  time.Duration
 	HTTPAttempts int
-	ServiceToken string
+	ServiceToken Secret
 }
+
+// Secret is a credential that never prints itself; Reveal gives the real value.
+type Secret string
+
+// Reveal returns the real value.
+func (s Secret) Reveal() string { return string(s) }
 
 // Load reads the shared variables through getenv and applies the declared defaults.
 // A missing SERVICE_TOKEN is an error: the worker must not start without it.
 func Load(getenv func(string) string) (Config, error) {
-	c := Config{ServiceToken: getenv("SERVICE_TOKEN")}
+	c := Config{ServiceToken: Secret(getenv("SERVICE_TOKEN"))}
 	if c.ServiceToken == "" {
 		return Config{}, errors.New("SERVICE_TOKEN is required")
 	}
